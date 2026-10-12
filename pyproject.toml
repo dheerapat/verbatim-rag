@@ -1,7 +1,7 @@
 [project]
 name = "verbatim-rag"
 version = "0.1.0"
-description = "Add your description here"
+description = "Small demo of verbatim RAG: retrieve, rerank, and highlight exact evidence spans"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
