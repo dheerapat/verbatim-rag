@@ -1,0 +1,12 @@
+[project]
+name = "verbatim-rag"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "chromadb>=1.5.9",
+    "peft>=0.15.2",
+    "torch>=2.14.1",
+    "transformers>=5.19.0",
+]
