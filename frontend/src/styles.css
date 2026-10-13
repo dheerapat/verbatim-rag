@@ -1,0 +1,12 @@
+@import '@astryxdesign/core/reset.css';
+@import '@astryxdesign/core/astryx.css';
+
+/* The exact evidence span inside the source paragraph. */
+.answer-mark {
+  background: var(--color-background-yellow);
+  color: inherit;
+  border-radius: var(--radius-inner);
+  padding-inline: var(--spacing-0-5);
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}

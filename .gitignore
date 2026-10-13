@@ -11,3 +11,7 @@ wheels/
 
 # Local Chroma store
 chroma-data/
+
+# Node (Astryx UI tooling)
+node_modules/
+dist/

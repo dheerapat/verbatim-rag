@@ -1,9 +1,16 @@
+"""Ingest Wikipedia pages into the Chroma store.
+
+CLI: uv run python -m core.ingest [ExtraTitle ...]
+"""
+
 import json
+import os
 import sys
 import time
 import urllib.parse
 import urllib.request
 import warnings
+from pathlib import Path
 
 import chromadb
 import torch
@@ -42,7 +49,9 @@ WIKI_TITLES = [
     "Portugal",
 ]
 EMBED_MODEL = "jinaai/jina-embeddings-v5-text-nano"
-CHROMA_PATH = "./chroma-data"
+CHROMA_PATH = os.environ.get(
+    "CHROMA_PATH", str(Path(__file__).resolve().parents[1] / "chroma-data")
+)
 COLLECTION = "wiki-multi"
 FETCH_DELAY = 0.25  # seconds between Wikipedia requests
 
@@ -82,14 +91,14 @@ def chunk(text, min_chars=150):
 
 def main():
     # Wikipedia serves one full-text extract per request, so we loop.
-    # Extra titles on the command line: uv run ingest.py Corsica Rome
+    # Extra titles on the command line: uv run python -m core.ingest Corsica Rome
     titles = WIKI_TITLES + [t for t in sys.argv[1:] if t not in WIKI_TITLES]
 
     pages = []
     for i, title in enumerate(titles, 1):
         try:
             extract = fetch_page(title)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - a failed fetch skips the page
             print(f"[{i}/{len(titles)}] {title}: FAILED ({e})")
             continue
         pairs = chunk(extract)
@@ -136,4 +145,5 @@ def main():
     print(f"Stored {collection.count()} chunks in {CHROMA_PATH}.")
 
 
-main()
+if __name__ == "__main__":
+    main()

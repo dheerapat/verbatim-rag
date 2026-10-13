@@ -1,0 +1,39 @@
+{
+  "name": "verbatim-rag",
+  "version": "1.0.0",
+  "description": "A small demo of **verbatim RAG**: retrieval that answers a question with an exact quote from the source text.",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "astryx": "astryx"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dheerapat/verbatim-rag.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/dheerapat/verbatim-rag/issues"
+  },
+  "homepage": "https://github.com/dheerapat/verbatim-rag#readme",
+  "dependencies": {
+    "@astryxdesign/cli": "^0.7.0",
+    "@astryxdesign/core": "^0.7.0",
+    "@astryxdesign/theme-neutral": "^0.7.0",
+    "@stylexjs/stylex": "^0.19.1",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react-swc": "^4.3.3",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4"
+  }
+}
