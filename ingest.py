@@ -1,8 +1,14 @@
 import json
 import urllib.request
+import warnings
 
 import chromadb
+import torch
+import transformers
 from transformers import AutoModel
+
+transformers.logging.set_verbosity_error()
+warnings.filterwarnings("ignore", category=FutureWarning)
 
 WIKI_URL = (
     "https://en.wikipedia.org/w/api.php"
@@ -21,26 +27,47 @@ def load_context():
 
 
 def chunk(text, min_chars=150):
-    """Split the article on paragraph lines. Drop short headings."""
-    return [line.strip() for line in text.split("\n") if len(line.strip()) >= min_chars]
+    """Split the article on paragraph lines.
+
+    Short lines are section headings. Each heading is attached to the next
+    paragraph so retrieval sees the section context. Returns (heading, paragraph)
+    pairs; the stored document stays the exact paragraph for verbatim highlight.
+    """
+    out = []
+    heading = ""
+    for line in text.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        if len(line) < min_chars:
+            heading = line
+        else:
+            out.append((heading, line))
+            heading = ""
+    return out
 
 
 def main():
-    chunks = chunk(load_context())
+    pairs = chunk(load_context())
     client = chromadb.PersistentClient(path=CHROMA_PATH)
     collection = client.get_or_create_collection(
         COLLECTION, configuration={"hnsw": {"space": "cosine"}}
     )
-    if collection.count() >= len(chunks):
-        print(f"Already ingested: {collection.count()} chunks. Nothing to do.")
+    if collection.count() == len(pairs):
+        print(f"Already ingested: {len(pairs)} chunks. Nothing to do.")
         return
 
-    print(f"Embedding {len(chunks)} chunks...")
-    embed = AutoModel.from_pretrained(EMBED_MODEL, trust_remote_code=True)
-    embeddings = embed.encode(texts=chunks, task="retrieval", prompt_name="document")
-    collection.add(
-        ids=[f"chunk-{i}" for i in range(len(chunks))],
-        documents=chunks,
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Embedding {len(pairs)} chunks on {device}...")
+    embed = AutoModel.from_pretrained(EMBED_MODEL, trust_remote_code=True).to(device)
+    # Embed heading + paragraph for retrieval; store the bare paragraph as the
+    # document so highlight returns an exact span of the source text.
+    embed_texts = [f"{h}\n{p}" if h else p for h, p in pairs]
+    embeddings = embed.encode(texts=embed_texts, task="retrieval", prompt_name="document")
+    collection.upsert(
+        ids=[f"chunk-{i}" for i in range(len(pairs))],
+        documents=[p for _, p in pairs],
+        metadatas=[{"heading": h} for h, _ in pairs],
         embeddings=embeddings.tolist(),
     )
     print(f"Stored {collection.count()} chunks in {CHROMA_PATH}.")

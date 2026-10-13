@@ -8,8 +8,8 @@ itself. The user can read the source words and check the answer.
 
 ## Pipeline
 
-1. **Ingest** (offline, one time): split the article into chunks, embed each chunk,
-   store the vectors in Chroma.
+1. **Ingest** (offline, one time): split the article into chunks, attach each section
+   heading to its paragraph, embed each chunk, store the vectors in Chroma.
 2. **Retrieve** (per query): embed the query, get the top-k chunks from Chroma.
 3. **Rerank**: score the candidates with a cross-encoder, keep the top 3.
 4. **Highlight**: find the exact evidence span in the top chunks.

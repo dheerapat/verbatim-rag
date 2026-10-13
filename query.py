@@ -1,9 +1,15 @@
 import os
 import sys
+import time
+import warnings
 
 import chromadb
 import torch
+import transformers
 from transformers import AutoModel
+
+transformers.logging.set_verbosity_error()
+warnings.filterwarnings("ignore", category=FutureWarning)
 
 EMBED_MODEL = "jinaai/jina-embeddings-v5-text-nano"
 RERANK_MODEL = "jinaai/jina-reranker-v3.5"
@@ -30,16 +36,20 @@ def main():
         print(f"Collection '{COLLECTION}' not found. Run: uv run ingest.py")
         return
 
-    embed = AutoModel.from_pretrained(EMBED_MODEL, trust_remote_code=True)
-    # ponytail: bf16 on CPU is ~3x slower here; use float32 unless a GPU is present.
-    dtype = "auto" if torch.cuda.is_available() else torch.float32
-    reranker = AutoModel.from_pretrained(RERANK_MODEL, dtype=dtype, trust_remote_code=True)
-    highlighter = AutoModel.from_pretrained(HIGHLIGHT_MODEL, trust_remote_code=True)
+    if torch.cuda.is_available():
+        dtype, device = torch.bfloat16, "cuda"
+    else:
+        dtype, device = torch.float32, "cpu"
+    print(f"Models on: {device}\n")
+    embed = AutoModel.from_pretrained(EMBED_MODEL, trust_remote_code=True).to(device)
+    reranker = AutoModel.from_pretrained(RERANK_MODEL, dtype=dtype, device_map=device, trust_remote_code=True)
+    highlighter = AutoModel.from_pretrained(HIGHLIGHT_MODEL, device_map=device, trust_remote_code=True)
 
     for q in (sys.argv[1:] or QUESTIONS):
         print(f"Q: {q}")
 
         # Stage 1: retrieve candidates from the vector store.
+        t0 = time.perf_counter()
         q_emb = embed.encode(texts=[q], task="retrieval", prompt_name="query")
         res = collection.query(
             query_embeddings=q_emb.tolist(),
@@ -47,20 +57,25 @@ def main():
             include=["documents", "distances"],
         )
         candidates = res["documents"][0]
-        print(f"  retrieve: {len(candidates)} candidates, best dist={res['distances'][0][0]:.3f}")
+        dt = (time.perf_counter() - t0) * 1000
+        print(f"  retrieve: {len(candidates)} candidates, best dist={res['distances'][0][0]:.3f} ({dt:.0f}ms)")
 
         # Stage 2: rerank candidates with the cross-encoder.
+        t0 = time.perf_counter()
         ranked = reranker.rerank(q, candidates, top_n=TOP_K_RERANK)
-        print(f"  rerank:   best={ranked[0]['relevance_score']:.2f}")
+        dt = (time.perf_counter() - t0) * 1000
+        print(f"  rerank:   best={ranked[0]['relevance_score']:.2f} ({dt:.0f}ms)")
 
         # Stage 3: highlight the exact evidence span in the top chunks.
+        t0 = time.perf_counter()
         evidence = "\n".join(r["document"] for r in ranked)
         result = highlighter.process(question=q, context=evidence, threshold=0.2)
+        dt = (time.perf_counter() - t0) * 1000
         if not result["spans"]:
-            print("  answer:   (no answer found)\n")
+            print(f"  answer:   (no answer found) ({dt:.0f}ms)\n")
             continue
         best = max(result["spans"], key=lambda s: s["score"])
-        print(f"  answer:   [{best['score']:.2f}] {best['text'].strip()}\n")
+        print(f"  answer:   [{best['score']:.2f}] {best['text'].strip()} ({dt:.0f}ms)\n")
 
 
 main()
