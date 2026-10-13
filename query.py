@@ -15,7 +15,7 @@ EMBED_MODEL = "jinaai/jina-embeddings-v5-text-nano"
 RERANK_MODEL = "jinaai/jina-reranker-v3.5"
 HIGHLIGHT_MODEL = "KRLabsOrg/verbatim-rag-modern-bert-v2"
 CHROMA_PATH = "./chroma-data"
-COLLECTION = "japan-demo"
+COLLECTION = "wiki-multi"
 TOP_K_RETRIEVE = int(os.environ.get("TOP_K_RETRIEVE", "10"))
 TOP_K_RERANK = 3
 
@@ -25,6 +25,16 @@ QUESTIONS = [
     "What are the warrior nobility of Japan called?",
     "What are the five main islands of Japan?",
     "What is the capital of France?",
+    "What is the longest river in Egypt?",
+    "Who wrote the play 'Romeo and Juliet'?",
+    "What is the official language of Brazil?",
+    "Which country has the most time zones?",
+    "What is the Holocaust memorial in Berlin called?",
+    "Who invented the telephone?",
+    "What year did the Berlin Wall fall?",
+    "What is the tallest mountain in the world?",
+    "What did Einstein win a Nobel Prize for?",
+    "What is the Bodhisattva of compassion called in Japanese Buddhism?",
 ]
 
 
@@ -58,15 +68,18 @@ def main():
         res = collection.query(
             query_embeddings=q_emb.tolist(),
             n_results=TOP_K_RETRIEVE,
-            include=["documents", "distances"],
+            include=["documents", "distances", "metadatas"],
         )
         documents = res["documents"]
         distances = res["distances"]
+        metadatas = res.get("metadatas")
         assert documents is not None and distances is not None
         candidates = documents[0]
+        best_title = metadatas[0][0]["title"] if metadatas else "?"
         dt = (time.perf_counter() - t0) * 1000
         print(
-            f"  retrieve: {len(candidates)} candidates, best dist={distances[0][0]:.3f} ({dt:.0f}ms)"
+            f"  retrieve: {len(candidates)} candidates, best dist={distances[0][0]:.3f}"
+            f" [{best_title}] ({dt:.0f}ms)"
         )
 
         # Stage 2: rerank candidates with the cross-encoder.

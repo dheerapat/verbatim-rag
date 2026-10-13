@@ -8,8 +8,9 @@ itself. The user can read the source words and check the answer.
 
 ## Pipeline
 
-1. **Ingest** (offline, one time): split the article into chunks, attach each section
-   heading to its paragraph, embed each chunk, store the vectors in Chroma.
+1. **Ingest** (offline, one time): fetch each Wikipedia page, split it into chunks,
+   attach each section heading to its paragraph, embed each chunk, store the
+   vectors in Chroma.
 2. **Retrieve** (per query): embed the query, get the top-k chunks from Chroma.
 3. **Rerank**: score the candidates with a cross-encoder, keep the top 3.
 4. **Highlight**: find the exact evidence span in the top chunks.
@@ -37,10 +38,17 @@ uv sync
 
 ## Usage
 
-Ingest the article one time:
+Ingest the default page set (26 country articles, about 1,270 chunks) with a
+250 ms delay between requests:
 
 ```bash
 uv run ingest.py
+```
+
+Add extra pages to the set:
+
+```bash
+uv run ingest.py Rome Nairobi Switzerland
 ```
 
 Ask the default questions:
@@ -58,47 +66,59 @@ uv run query.py "What is the currency of Japan?"
 Change the number of retrieved chunks:
 
 ```bash
-TOP_K_RETRIEVE=3 uv run query.py
+TOP_K_RETRIEVE=20 uv run query.py
 ```
 
 ## Example
 
+Corpus: 26 Wikipedia country articles, 1,267 chunks. `TOP_K_RETRIEVE=20`.
+
+Questions in the corpus get an exact quote and a score. Questions outside the
+corpus get a low rerank score and no span:
+
 ```
 Q: What is the capital of Japan?
-  retrieve: 10 candidates, best dist=0.262
-  rerank:   best=0.48
-  answer:   [0.92] Tokyo is the country's capital and largest city.
-
-Q: What are the five main islands of Japan?
-  retrieve: 10 candidates, best dist=0.222
-  rerank:   best=0.69
-  answer:   [0.99] The country's five main islands, from north to south, are Hokkaido, Honshu, Shikoku, Kyushu and Okinawa.
+  retrieve: 20 candidates, best dist=0.273 [Japan]
+  rerank:   best=0.47
+  answer:   [0.91] Tokyo is the country's capital and largest city.
 
 Q: What is the capital of France?
-  retrieve: 10 candidates, best dist=0.687
-  rerank:   best=-0.06
+  retrieve: 20 candidates, best dist=0.253 [France]
+  rerank:   best=0.54
+  answer:   [0.92] Its capital, largest city and main cultural and economic centre is Paris, with a metropolitan population of over 13 million.
+
+Q: Who invented the telephone?
+  retrieve: 20 candidates, best dist=0.597 [Brazil]
+  rerank:   best=-0.12
   answer:   (no answer found)
 ```
 
-The last question is not in the context. The highlighter returns no span.
+The `[source]` tag shows the page of the best candidate. The last question is
+not in the corpus. The highlighter returns no span.
 
 ## Files
 
 | File | Purpose |
 |------|---------|
-| `ingest.py` | Fetch, chunk, embed, and store the context. |
+| `ingest.py` | Fetch pages, chunk, embed, and store. |
 | `query.py` | Retrieve, rerank, and highlight for each question. |
-| `main.py` | Old single-file version. Kept for reference. |
 
 The vector store is a local Chroma `PersistentClient` at `./chroma-data`
 (gitignored). No server and no Docker are needed.
 
 ## Notes
 
-- The context is the Wikipedia article "Japan": about 52,000 chars and 88 chunks.
-- On CPU the reranker is the slow part. One query is about 12s. A GPU removes this cost.
+- The embedded text is `title + heading + paragraph`. The stored document is the
+  bare paragraph, so the highlight always returns an exact span of the source.
+- Embedding runs in batches of 64. One call over the full corpus exceeds VRAM.
+- Wikipedia serves one full-text extract per request, so ingest loops over the
+  titles with a 250 ms delay between requests.
+- With a small corpus, near-miss distractors surface. "Most time zones" answers
+  with Brazil (France, not in view, has more). More pages reduce this.
 - `TOP_K_RETRIEVE=10` is the default. A small value is fast but can miss the
   correct chunk. The reranker cannot fix a miss in stage 1.
+- On CPU the reranker is the slow part. One query is about 12s. A GPU removes
+  this cost. The first query of a run is slower; this is one-time CUDA warm-up.
 
 ## Other use cases
 
