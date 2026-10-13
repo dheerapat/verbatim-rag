@@ -42,10 +42,14 @@ def main():
         dtype, device = torch.float32, "cpu"
     print(f"Models on: {device}\n")
     embed = AutoModel.from_pretrained(EMBED_MODEL, trust_remote_code=True).to(device)
-    reranker = AutoModel.from_pretrained(RERANK_MODEL, dtype=dtype, device_map=device, trust_remote_code=True)
-    highlighter = AutoModel.from_pretrained(HIGHLIGHT_MODEL, device_map=device, trust_remote_code=True)
+    reranker = AutoModel.from_pretrained(
+        RERANK_MODEL, dtype=dtype, device_map=device, trust_remote_code=True
+    )
+    highlighter = AutoModel.from_pretrained(
+        HIGHLIGHT_MODEL, device_map=device, trust_remote_code=True
+    )
 
-    for q in (sys.argv[1:] or QUESTIONS):
+    for q in sys.argv[1:] or QUESTIONS:
         print(f"Q: {q}")
 
         # Stage 1: retrieve candidates from the vector store.
@@ -56,9 +60,14 @@ def main():
             n_results=TOP_K_RETRIEVE,
             include=["documents", "distances"],
         )
-        candidates = res["documents"][0]
+        documents = res["documents"]
+        distances = res["distances"]
+        assert documents is not None and distances is not None
+        candidates = documents[0]
         dt = (time.perf_counter() - t0) * 1000
-        print(f"  retrieve: {len(candidates)} candidates, best dist={res['distances'][0][0]:.3f} ({dt:.0f}ms)")
+        print(
+            f"  retrieve: {len(candidates)} candidates, best dist={distances[0][0]:.3f} ({dt:.0f}ms)"
+        )
 
         # Stage 2: rerank candidates with the cross-encoder.
         t0 = time.perf_counter()
@@ -75,7 +84,9 @@ def main():
             print(f"  answer:   (no answer found) ({dt:.0f}ms)\n")
             continue
         best = max(result["spans"], key=lambda s: s["score"])
-        print(f"  answer:   [{best['score']:.2f}] {best['text'].strip()} ({dt:.0f}ms)\n")
+        print(
+            f"  answer:   [{best['score']:.2f}] {best['text'].strip()} ({dt:.0f}ms)\n"
+        )
 
 
 main()

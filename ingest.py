@@ -20,7 +20,9 @@ COLLECTION = "japan-demo"
 
 
 def load_context():
-    req = urllib.request.Request(WIKI_URL, headers={"User-Agent": "verbatim-rag-demo/1.0"})
+    req = urllib.request.Request(
+        WIKI_URL, headers={"User-Agent": "verbatim-rag-demo/1.0"}
+    )
     with urllib.request.urlopen(req, timeout=30) as resp:
         data = json.load(resp)
     return next(iter(data["query"]["pages"].values()))["extract"]
@@ -63,7 +65,9 @@ def main():
     # Embed heading + paragraph for retrieval; store the bare paragraph as the
     # document so highlight returns an exact span of the source text.
     embed_texts = [f"{h}\n{p}" if h else p for h, p in pairs]
-    embeddings = embed.encode(texts=embed_texts, task="retrieval", prompt_name="document")
+    embeddings = embed.encode(
+        texts=embed_texts, task="retrieval", prompt_name="document"
+    )
     collection.upsert(
         ids=[f"chunk-{i}" for i in range(len(pairs))],
         documents=[p for _, p in pairs],
