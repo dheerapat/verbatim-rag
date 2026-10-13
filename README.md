@@ -1,5 +1,7 @@
 # verbatim-rag demo
 
+<img width="744" height="642" alt="Recording 2026-10-13 112028" src="https://github.com/user-attachments/assets/8bdc9ffb-3734-43e4-aafa-4071b881f1a7" />
+
 A small demo of **verbatim RAG**: retrieval that answers a question with an exact
 quote from the source text.
 
