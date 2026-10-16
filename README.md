@@ -28,8 +28,8 @@ embed query --> Chroma top-k --> rerank top-3 --> highlight --> exact span
 
 | Stage | Model |
 |-------|-------|
-| Embed | `jinaai/jina-embeddings-v5-text-nano` |
-| Rerank | `jinaai/jina-reranker-v3.5` |
+| Embed | `Alibaba-NLP/gte-modernbert-base` |
+| Rerank | `Alibaba-NLP/gte-reranker-modernbert-base` |
 | Highlight | `KRLabsOrg/verbatim-rag-modern-bert-v2` |
 
 ## Setup

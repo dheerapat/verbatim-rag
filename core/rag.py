@@ -14,11 +14,13 @@ import torch
 import transformers
 from transformers import AutoModel
 
+from core.embed import encode, load_embed_model
+
 transformers.logging.set_verbosity_error()
 warnings.filterwarnings("ignore", category=FutureWarning)
 
-EMBED_MODEL = "jinaai/jina-embeddings-v5-text-nano"
-RERANK_MODEL = "jinaai/jina-reranker-v3.5"
+EMBED_MODEL = "Alibaba-NLP/gte-modernbert-base"
+RERANK_MODEL = "Alibaba-NLP/gte-reranker-modernbert-base"
 HIGHLIGHT_MODEL = "KRLabsOrg/verbatim-rag-modern-bert-v2"
 # Repo-root chroma-data, independent of the working directory.
 CHROMA_PATH = os.environ.get(
@@ -57,15 +59,10 @@ def load():
         print(f"Collection '{COLLECTION}' not found. Run: uv run python -m core.ingest")
         return None
 
-    if torch.cuda.is_available():
-        dtype, device = torch.bfloat16, "cuda"
-    else:
-        dtype, device = torch.float32, "cpu"
+    dtype, device = (torch.bfloat16, "cuda") if torch.cuda.is_available() else (torch.float32, "cpu")
     print(f"Models on: {device}\n")
-    embed = AutoModel.from_pretrained(EMBED_MODEL, trust_remote_code=True).to(device)
-    reranker = AutoModel.from_pretrained(
-        RERANK_MODEL, dtype=dtype, device_map=device, trust_remote_code=True
-    )
+    embed = load_embed_model(EMBED_MODEL, device=device)
+    reranker = load_reranker(RERANK_MODEL, device=device)
     highlighter = AutoModel.from_pretrained(
         HIGHLIGHT_MODEL, device_map=device, trust_remote_code=True
     )
@@ -77,6 +74,38 @@ def load():
     }
 
 
+def load_reranker(model_name, device):
+    """Load the GTE-ModernBERT reranker: a sequence-classification cross-encoder
+    whose single logit is the relevance score of a (query, passage) pair."""
+    from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+    model = AutoModelForSequenceClassification.from_pretrained(
+        model_name, dtype="auto"
+    ).to(device)
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    return {"model": model, "tokenizer": tokenizer}
+
+
+def rerank(reranker, question, candidates, top_n, max_length=8192):
+    """Score (query, passage) pairs and return the top_n, best first."""
+    model = reranker["model"]
+    tokenizer = reranker["tokenizer"]
+    inputs = tokenizer(
+        [(question, c) for c in candidates],
+        padding=True, truncation=True, max_length=max_length, return_tensors="pt",
+    ).to(model.device)
+    with torch.no_grad():
+        logits = model(**inputs).logits.view(-1).float()
+    scores = logits.tolist()
+    ranked = sorted(
+        ({"document": d, "index": i, "relevance_score": s}
+         for i, (d, s) in enumerate(zip(candidates, scores))),
+        key=lambda r: r["relevance_score"],
+        reverse=True,
+    )
+    return ranked[:top_n]
+
+
 def answer(question, models):
     """Run retrieve -> rerank -> highlight. Returns a dict with the exact span.
 
@@ -85,11 +114,9 @@ def answer(question, models):
     """
     collection = models["collection"]
     t0 = time.perf_counter()
-    q_emb = models["embed"].encode(
-        texts=[question], task="retrieval", prompt_name="query"
-    )
+    q_emb = encode(models["embed"], [question])[0]
     res = collection.query(
-        query_embeddings=q_emb.tolist(),
+        query_embeddings=[q_emb],
         n_results=TOP_K_RETRIEVE,
         include=["documents", "distances", "metadatas"],
     )
@@ -99,7 +126,7 @@ def answer(question, models):
     retrieve_ms = (time.perf_counter() - t0) * 1000
 
     t0 = time.perf_counter()
-    ranked = models["reranker"].rerank(question, candidates, top_n=TOP_K_RERANK)
+    ranked = rerank(models["reranker"], question, candidates, TOP_K_RERANK)
     rerank_ms = (time.perf_counter() - t0) * 1000
 
     # Join the top chunks for the highlighter, but remember where each chunk

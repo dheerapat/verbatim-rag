@@ -12,10 +12,11 @@ import urllib.request
 import warnings
 from pathlib import Path
 
-import chromadb
 import torch
+import chromadb
 import transformers
-from transformers import AutoModel
+
+from core.embed import encode, load_embed_model
 
 transformers.logging.set_verbosity_error()
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -48,12 +49,12 @@ WIKI_TITLES = [
     "Greece",
     "Portugal",
 ]
-EMBED_MODEL = "jinaai/jina-embeddings-v5-text-nano"
+EMBED_MODEL = "Alibaba-NLP/gte-modernbert-base"
 CHROMA_PATH = os.environ.get(
     "CHROMA_PATH", str(Path(__file__).resolve().parents[1] / "chroma-data")
 )
 COLLECTION = "wiki-multi"
-FETCH_DELAY = 0.25  # seconds between Wikipedia requests
+FETCH_DELAY = 1.0  # seconds between Wikipedia requests (lower = HTTP 429)
 
 
 def fetch_page(title):
@@ -114,33 +115,53 @@ def main():
     print(f"\nIngesting {len(triples)} chunks from {len(pages)} pages...")
     client = chromadb.PersistentClient(path=CHROMA_PATH)
     collection = client.get_or_create_collection(
-        COLLECTION, configuration={"hnsw": {"space": "cosine"}}
+        COLLECTION,
+        configuration={"hnsw": {"space": "cosine"}},
+        metadata={"embed_model": EMBED_MODEL},
     )
-    if collection.count() == len(triples):
-        print(f"Already ingested: {len(triples)} chunks. Nothing to do.")
+    # The stored embeddings are only valid for the model that produced them.
+    stored_model = (collection.metadata or {}).get("embed_model")
+    if stored_model != EMBED_MODEL:
+        print(f"Embedding model changed; re-embedding {collection.count()} chunks.")
+        client.delete_collection(COLLECTION)
+        collection = client.get_or_create_collection(
+            COLLECTION,
+            configuration={"hnsw": {"space": "cosine"}},
+            metadata={"embed_model": EMBED_MODEL},
+        )
+    # Ids must not depend on which pages succeeded in one run: use the
+    # per-page chunk position, not the global triple index.
+    ids = [f"{title}-{j}" for title, pairs in pages for j in range(len(pairs))]
+    # Incremental: only embed chunks this run has not stored yet, so a re-run
+    # after Wikipedia 429s fills the gaps without re-embedding everything.
+    have = set(collection.get(ids=ids, limit=len(ids) + 1)["ids"] if ids else [])
+    todo = [
+        (i, t)
+        for i, (t, cid) in enumerate(zip(triples, ids))
+        if cid not in have
+    ]
+    if not todo:
+        print(f"Already ingested: {collection.count()} chunks. Nothing to do.")
         return
-
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Embedding {len(triples)} chunks on {device}...")
-    embed = AutoModel.from_pretrained(EMBED_MODEL, trust_remote_code=True).to(device)
+    print(f"Embedding {len(todo)}/{len(triples)} chunks on {device}...")
+    embed = load_embed_model(EMBED_MODEL, device=device)
     # Embed title + heading + paragraph for retrieval; store the bare paragraph
     # as the document so highlight returns an exact span of the source text.
     embed_texts = [
-        f"{title}\n{h}\n{p}" if h else f"{title}\n{p}" for title, h, p in triples
+        f"{title}\n{h}\n{p}" if h else f"{title}\n{p}" for _, (title, h, p) in todo
     ]
     # Encode in batches; a single call over hundreds of chunks exceeds VRAM.
     embeddings = []
     for start in range(0, len(embed_texts), 64):
         batch = embed_texts[start : start + 64]
-        embeddings.extend(
-            embed.encode(texts=batch, task="retrieval", prompt_name="document")
-        )
+        embeddings.extend(encode(embed, batch))
         print(f"  embedded {min(start + 64, len(embed_texts))}/{len(embed_texts)}")
     collection.upsert(
-        ids=[f"{title}-{i}" for i, (title, _, _) in enumerate(triples)],
-        documents=[p for _, _, p in triples],
-        metadatas=[{"title": t, "heading": h} for t, h, _ in triples],
-        embeddings=[e.tolist() for e in embeddings],
+        ids=[ids[i] for i, _ in todo],
+        documents=[p for _, (_, _, p) in todo],
+        metadatas=[{"title": t, "heading": h} for _, (t, h, _) in todo],
+        embeddings=embeddings,
     )
     print(f"Stored {collection.count()} chunks in {CHROMA_PATH}.")
 
