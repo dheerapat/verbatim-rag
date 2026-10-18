@@ -19,7 +19,10 @@ def encode(embed_model, texts, batch_size=64, max_length=8192):
     for start in range(0, len(texts), batch_size):
         batch = texts[start : start + batch_size]
         inputs = tokenizer(
-            batch, max_length=max_length, padding=True, truncation=True,
+            batch,
+            max_length=max_length,
+            padding=True,
+            truncation=True,
             return_tensors="pt",
         ).to(model.device)
         cls = model(**inputs).last_hidden_state[:, 0]

@@ -31,23 +31,6 @@ WIKI_TITLES = [
     "Germany",
     "Australia",
     "Canada",
-    "Kenya",
-    "Peru",
-    "Indonesia",
-    "Italy",
-    "Mexico",
-    "Nigeria",
-    "Poland",
-    "South Korea",
-    "Spain",
-    "Sweden",
-    "Thailand",
-    "Turkey",
-    "Vietnam",
-    "Argentina",
-    "Morocco",
-    "Greece",
-    "Portugal",
 ]
 EMBED_MODEL = "Alibaba-NLP/gte-modernbert-base"
 CHROMA_PATH = os.environ.get(
@@ -135,11 +118,7 @@ def main():
     # Incremental: only embed chunks this run has not stored yet, so a re-run
     # after Wikipedia 429s fills the gaps without re-embedding everything.
     have = set(collection.get(ids=ids, limit=len(ids) + 1)["ids"] if ids else [])
-    todo = [
-        (i, t)
-        for i, (t, cid) in enumerate(zip(triples, ids))
-        if cid not in have
-    ]
+    todo = [(i, t) for i, (t, cid) in enumerate(zip(triples, ids)) if cid not in have]
     if not todo:
         print(f"Already ingested: {collection.count()} chunks. Nothing to do.")
         return

@@ -59,7 +59,11 @@ def load():
         print(f"Collection '{COLLECTION}' not found. Run: uv run python -m core.ingest")
         return None
 
-    dtype, device = (torch.bfloat16, "cuda") if torch.cuda.is_available() else (torch.float32, "cpu")
+    dtype, device = (
+        (torch.bfloat16, "cuda")
+        if torch.cuda.is_available()
+        else (torch.float32, "cpu")
+    )
     print(f"Models on: {device}\n")
     embed = load_embed_model(EMBED_MODEL, device=device)
     reranker = load_reranker(RERANK_MODEL, device=device)
@@ -92,14 +96,19 @@ def rerank(reranker, question, candidates, top_n, max_length=8192):
     tokenizer = reranker["tokenizer"]
     inputs = tokenizer(
         [(question, c) for c in candidates],
-        padding=True, truncation=True, max_length=max_length, return_tensors="pt",
+        padding=True,
+        truncation=True,
+        max_length=max_length,
+        return_tensors="pt",
     ).to(model.device)
     with torch.no_grad():
         logits = model(**inputs).logits.view(-1).float()
     scores = logits.tolist()
     ranked = sorted(
-        ({"document": d, "index": i, "relevance_score": s}
-         for i, (d, s) in enumerate(zip(candidates, scores))),
+        (
+            {"document": d, "index": i, "relevance_score": s}
+            for i, (d, s) in enumerate(zip(candidates, scores))
+        ),
         key=lambda r: r["relevance_score"],
         reverse=True,
     )
