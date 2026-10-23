@@ -29,6 +29,7 @@ CHROMA_PATH = os.environ.get(
 COLLECTION = "wiki-multi"
 TOP_K_RETRIEVE = int(os.environ.get("TOP_K_RETRIEVE", "10"))
 TOP_K_RERANK = 3
+RERANK_THRESHOLD = float(os.environ.get("RERANK_THRESHOLD", "2.0"))
 THRESHOLD = 0.2
 
 QUESTIONS = [
@@ -138,6 +139,24 @@ def answer(question, models):
     ranked = rerank(models["reranker"], question, candidates, TOP_K_RERANK)
     rerank_ms = (time.perf_counter() - t0) * 1000
 
+    out = {
+        "question": question,
+        "answer": None,
+        "score": None,
+        "title": metadatas[0]["title"],
+        "heading": metadatas[0]["heading"],
+        "paragraph": candidates[0],
+        "start": None,
+        "end": None,
+        "retrieve_ms": retrieve_ms,
+        "rerank_ms": rerank_ms,
+        "highlight_ms": 0.0,
+        "best_distance": float(distances[0]),
+        "best_rerank": float(ranked[0]["relevance_score"]),
+    }
+    if out["best_rerank"] < RERANK_THRESHOLD:
+        return out
+
     # Join the top chunks for the highlighter, but remember where each chunk
     # starts so a span can be mapped back to one source paragraph.
     parts, offsets = [], []
@@ -153,23 +172,8 @@ def answer(question, models):
     result = models["highlighter"].process(
         question=question, context=evidence, threshold=THRESHOLD
     )
-    highlight_ms = (time.perf_counter() - t0) * 1000
+    out["highlight_ms"] = (time.perf_counter() - t0) * 1000
 
-    out = {
-        "question": question,
-        "answer": None,
-        "score": None,
-        "title": metadatas[0]["title"],
-        "heading": metadatas[0]["heading"],
-        "paragraph": candidates[0],
-        "start": None,
-        "end": None,
-        "retrieve_ms": retrieve_ms,
-        "rerank_ms": rerank_ms,
-        "highlight_ms": highlight_ms,
-        "best_distance": float(distances[0]),
-        "best_rerank": float(ranked[0]["relevance_score"]),
-    }
     if not result["spans"]:
         return out
 

@@ -154,9 +154,10 @@ Q: Who invented the telephone?
 The title in brackets after `best dist` shows the page of the best candidate.
 The last question is not in the corpus. The highlighter returns no span.
 
-In this run, every answer had a rerank score of 2.16 or more. Every question
-with no answer had a score of 1.65 or less. The code does not use a rerank
-threshold. Only the highlighter threshold (0.2) decides if a span exists.
+The default `RERANK_THRESHOLD=2.0` rejects low-relevance candidates before
+highlighting. Only candidates at or above that score reach the highlighter,
+which still uses its 0.2 span threshold. Override the rerank cutoff when
+calibrating against a different corpus, for example `RERANK_THRESHOLD=1.8`.
 
 ## Files
 
