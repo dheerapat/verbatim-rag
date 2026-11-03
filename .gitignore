@@ -9,8 +9,11 @@ wheels/
 # Virtual environments
 .venv
 
-# Local Chroma store
+# Local LanceDB store and development secrets
+lance-data/
+# Legacy local Chroma data; retained but no longer read.
 chroma-data/
+.env
 
 # Node (Astryx UI tooling)
 node_modules/

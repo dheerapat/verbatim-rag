@@ -12,8 +12,8 @@ itself. The user can read the source words and check the answer.
 
 1. **Ingest** (offline, one time): fetch each Wikipedia page, split it into chunks,
    attach each section heading to its paragraph, embed each chunk, store the
-   vectors in Chroma.
-2. **Retrieve** (per query): embed the query, get the top-k chunks from Chroma.
+   vectors in LanceDB.
+2. **Retrieve** (per query): embed the query, get the top-k chunks from LanceDB.
 3. **Rerank**: score the candidates with a cross-encoder, keep the top 3.
 4. **Highlight**: find the exact evidence span in the top chunks.
 
@@ -21,7 +21,7 @@ itself. The user can read the source words and check the answer.
 question
    |
    v
-embed query --> Chroma top-k --> rerank top-3 --> highlight --> exact span
+embed query --> LanceDB top-k --> rerank top-3 --> highlight --> exact span
 ```
 
 ## Models
@@ -45,7 +45,7 @@ cd frontend && npm install && cd ..
 
 | Directory | Role |
 |-----------|------|
-| `core/` | The RAG logic. `ingest.py`, `rag.py` and `embed.py`. No HTTP. |
+| `core/` | The RAG logic. `ingest.py`, `rag.py`, `embed.py` and `vector_store.py`. No HTTP. |
 | `backend/` | FastAPI app in `main.py`. Calls `core/`. |
 | `frontend/` | React 19 + Vite + Astryx UI. Calls the API. |
 
@@ -81,6 +81,62 @@ Change the number of retrieved chunks:
 ```bash
 TOP_K_RETRIEVE=20 uv run python -m core.rag
 ```
+
+## S3 storage with RustFS
+
+The default local LanceDB URI keeps the demo self-contained. For an S3-backed table
+using RustFS, copy `.env.example` to `.env`, replace both credentials with unique
+values, and start RustFS:
+
+```bash
+cp .env.example .env
+# Edit .env and set RUSTFS_ACCESS_KEY and RUSTFS_SECRET_KEY.
+docker compose up -d
+```
+
+RustFS exposes its S3 API at <http://localhost:9100> and its Console at
+<http://localhost:9101> by default. The `rustfs-create-bucket` one-shot service uses
+AWS CLI to wait for RustFS and create the `verbatim-rag` bucket automatically; it
+succeeds without visiting the Console and safely skips creation if the bucket exists.
+
+If you copied an earlier `.env.example`, update the existing `.env` (copying the
+template again will not overwrite it):
+
+```dotenv
+RUSTFS_S3_PORT=9100
+RUSTFS_CONSOLE_PORT=9101
+RUSTFS_BUCKET=verbatim-rag
+LANCEDB_S3_ENDPOINT=http://localhost:9100
+```
+
+The host ports are configurable with
+`RUSTFS_S3_PORT` and `RUSTFS_CONSOLE_PORT`; Compose maps them to RustFS's internal
+ports 9000 and 9001. If a port is already allocated, choose unused host ports and
+keep `LANCEDB_S3_ENDPOINT` in sync with the S3 host port. For example, use `9200` for
+the S3 port and set `LANCEDB_S3_ENDPOINT=http://localhost:9200` in `.env`, then run
+`docker compose up -d --force-recreate`.
+
+Then ingest and query with the env file loaded into each command:
+
+```bash
+uv run --env-file .env python -m core.ingest
+uv run --env-file .env python -m core.rag "What is the capital of Japan?"
+uv run --env-file .env uvicorn backend.main:app --reload
+```
+
+Use the same `--env-file .env` option when starting the web app in production.
+
+The example config points `LANCEDB_URI` to `s3://verbatim-rag/lance-data` and
+`LANCEDB_S3_ENDPOINT` to the local RustFS service. Set the endpoint to the URL
+reachable from the Python process; when the app runs in another container, use the
+RustFS service name and container port instead of `localhost`. The Compose file binds
+the RustFS ports to loopback only. Use strong secrets and TLS before making RustFS
+reachable beyond a trusted local network. LanceDB's local S3-backed OSS client stores
+the table in the bucket; the AWS CLI init service provisions the bucket.
+
+After moving from the old Chroma store, run ingestion again to recreate the table.
+The ignored `chroma-data/` directory is left untouched as a backup; this app no longer
+reads it.
 
 ## Web UI
 
@@ -163,14 +219,17 @@ calibrating against a different corpus, for example `RERANK_THRESHOLD=1.8`.
 
 | File | Purpose |
 |------|---------|
-| `core/ingest.py` | Fetch pages, chunk, embed, and store. |
-| `core/rag.py` | Retrieve, rerank, and highlight. The shared pipeline. |
+| `core/ingest.py` | Fetch pages, chunk, embed, and store in LanceDB. |
+| `core/rag.py` | Retrieve from LanceDB, rerank, and highlight. The shared pipeline. |
 | `core/embed.py` | Embedding helpers: CLS pooling and L2 normalization. |
+| `core/vector_store.py` | Configure local or S3-compatible LanceDB connections. |
 | `backend/main.py` | FastAPI server. Serves `/api` and the built UI. |
 | `frontend/src/App.tsx` | React + Astryx page. |
 
-The vector store is a local Chroma `PersistentClient` at `./chroma-data`
-(gitignored). No server and no Docker are needed.
+By default the vector store is a local LanceDB table at `./lance-data` (gitignored),
+so no server or Docker is needed. To use object storage instead, configure `LANCEDB_URI`
+with an S3 URI and set the S3 credentials and endpoint; the RustFS setup below provides
+an S3-compatible service for local development.
 
 ## Notes
 

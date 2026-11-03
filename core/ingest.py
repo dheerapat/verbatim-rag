@@ -1,22 +1,21 @@
-"""Ingest Wikipedia pages into the Chroma store.
+"""Ingest Wikipedia pages into the LanceDB vector store.
 
 CLI: uv run python -m core.ingest [ExtraTitle ...]
 """
 
 import json
-import os
 import sys
 import time
 import urllib.parse
 import urllib.request
 import warnings
-from pathlib import Path
 
 import torch
-import chromadb
 import transformers
+from lancedb.index import BTree
 
 from core.embed import encode, load_embed_model
+from core.vector_store import connect_database
 
 transformers.logging.set_verbosity_error()
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -33,10 +32,7 @@ WIKI_TITLES = [
     "Canada",
 ]
 EMBED_MODEL = "Alibaba-NLP/gte-modernbert-base"
-CHROMA_PATH = os.environ.get(
-    "CHROMA_PATH", str(Path(__file__).resolve().parents[1] / "chroma-data")
-)
-COLLECTION = "wiki-multi"
+TABLE_NAME = "wiki-multi"
 FETCH_DELAY = 1.0  # seconds between Wikipedia requests (lower = HTTP 429)
 
 
@@ -96,31 +92,41 @@ def main():
         return
 
     print(f"\nIngesting {len(triples)} chunks from {len(pages)} pages...")
-    client = chromadb.PersistentClient(path=CHROMA_PATH)
-    collection = client.get_or_create_collection(
-        COLLECTION,
-        configuration={"hnsw": {"space": "cosine"}},
-        metadata={"embed_model": EMBED_MODEL},
-    )
-    # The stored embeddings are only valid for the model that produced them.
-    stored_model = (collection.metadata or {}).get("embed_model")
-    if stored_model != EMBED_MODEL:
-        print(f"Embedding model changed; re-embedding {collection.count()} chunks.")
-        client.delete_collection(COLLECTION)
-        collection = client.get_or_create_collection(
-            COLLECTION,
-            configuration={"hnsw": {"space": "cosine"}},
-            metadata={"embed_model": EMBED_MODEL},
-        )
-    # Ids must not depend on which pages succeeded in one run: use the
-    # per-page chunk position, not the global triple index.
+    db = connect_database()
+    table = db.open_table(TABLE_NAME) if TABLE_NAME in db.list_tables().tables else None
+
+    # Stored vectors are only valid for the model that produced them. A changed
+    # model requires rebuilding this local LanceDB OSS table.
+    if table is not None:
+        sample = table.search().select(["embed_model"]).limit(1).to_list()
+        stored_model = sample[0]["embed_model"] if sample else EMBED_MODEL
+        if stored_model != EMBED_MODEL:
+            print(f"Embedding model changed; rebuilding {table.count_rows()} chunks.")
+            db.drop_table(TABLE_NAME)
+            table = None
+
+    # IDs are based on each page's chunk position, independent of fetch success.
     ids = [f"{title}-{j}" for title, pairs in pages for j in range(len(pairs))]
-    # Incremental: only embed chunks this run has not stored yet, so a re-run
-    # after Wikipedia 429s fills the gaps without re-embedding everything.
-    have = set(collection.get(ids=ids, limit=len(ids) + 1)["ids"] if ids else [])
+    # Only query the IDs in this run. The result is explicitly bounded.
+    if table is None:
+        have = set()
+    elif ids:
+        quoted_ids = ", ".join("'" + value.replace("'", "''") + "'" for value in ids)
+        found = (
+            table.search()
+            .where(f"id IN ({quoted_ids})")
+            .select(["id"])
+            .limit(len(ids))
+            .to_list()
+        )
+        have = {row["id"] for row in found}
+    else:
+        have = set()
+
     todo = [(i, t) for i, (t, cid) in enumerate(zip(triples, ids)) if cid not in have]
     if not todo:
-        print(f"Already ingested: {collection.count()} chunks. Nothing to do.")
+        count = table.count_rows() if table is not None else 0
+        print(f"Already ingested: {count} chunks. Nothing to do.")
         return
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Embedding {len(todo)}/{len(triples)} chunks on {device}...")
@@ -136,13 +142,29 @@ def main():
         batch = embed_texts[start : start + 64]
         embeddings.extend(encode(embed, batch))
         print(f"  embedded {min(start + 64, len(embed_texts))}/{len(embed_texts)}")
-    collection.upsert(
-        ids=[ids[i] for i, _ in todo],
-        documents=[p for _, (_, _, p) in todo],
-        metadatas=[{"title": t, "heading": h} for _, (t, h, _) in todo],
-        embeddings=embeddings,
-    )
-    print(f"Stored {collection.count()} chunks in {CHROMA_PATH}.")
+    rows = [
+        {
+            "id": ids[index],
+            "vector": vector,
+            "document": paragraph,
+            "title": title,
+            "heading": heading,
+            "embed_model": EMBED_MODEL,
+        }
+        for (index, (title, heading, paragraph)), vector in zip(todo, embeddings)
+    ]
+    if table is None:
+        table = db.create_table(TABLE_NAME, data=rows)
+        table.create_index("id", config=BTree())
+    else:
+        (
+            table.merge_insert("id")
+            .when_matched_update_all()
+            .when_not_matched_insert_all()
+            .execute(rows)
+        )
+    table.optimize()
+    print(f"Stored {table.count_rows()} chunks in {db.uri}.")
 
 
 if __name__ == "__main__":

@@ -7,14 +7,13 @@ import os
 import sys
 import time
 import warnings
-from pathlib import Path
 
-import chromadb
 import torch
 import transformers
 from transformers import AutoModel
 
 from core.embed import encode, load_embed_model
+from core.vector_store import connect_database
 
 transformers.logging.set_verbosity_error()
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -22,11 +21,7 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 EMBED_MODEL = "Alibaba-NLP/gte-modernbert-base"
 RERANK_MODEL = "Alibaba-NLP/gte-reranker-modernbert-base"
 HIGHLIGHT_MODEL = "KRLabsOrg/verbatim-rag-modern-bert-v2"
-# Repo-root chroma-data, independent of the working directory.
-CHROMA_PATH = os.environ.get(
-    "CHROMA_PATH", str(Path(__file__).resolve().parents[1] / "chroma-data")
-)
-COLLECTION = "wiki-multi"
+TABLE_NAME = "wiki-multi"
 TOP_K_RETRIEVE = int(os.environ.get("TOP_K_RETRIEVE", "10"))
 TOP_K_RERANK = 3
 RERANK_THRESHOLD = float(os.environ.get("RERANK_THRESHOLD", "2.0"))
@@ -52,19 +47,17 @@ QUESTIONS = [
 
 
 def load():
-    """Load the collection and all three models once. Returns None if no data."""
-    client = chromadb.PersistentClient(path=CHROMA_PATH)
-    try:
-        collection = client.get_collection(COLLECTION)
-    except Exception:  # noqa: BLE001 - a missing collection is expected
-        print(f"Collection '{COLLECTION}' not found. Run: uv run python -m core.ingest")
+    """Load the LanceDB table and all three models once; return None if absent."""
+    db = connect_database()
+    if TABLE_NAME not in db.list_tables().tables:
+        print(f"Table '{TABLE_NAME}' not found. Run: uv run python -m core.ingest")
+        return None
+    table = db.open_table(TABLE_NAME)
+    if table.count_rows() == 0:
+        print(f"Table '{TABLE_NAME}' is empty. Run: uv run python -m core.ingest")
         return None
 
-    dtype, device = (
-        (torch.bfloat16, "cuda")
-        if torch.cuda.is_available()
-        else (torch.float32, "cpu")
-    )
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Models on: {device}\n")
     embed = load_embed_model(EMBED_MODEL, device=device)
     reranker = load_reranker(RERANK_MODEL, device=device)
@@ -75,7 +68,7 @@ def load():
         "embed": embed,
         "reranker": reranker,
         "highlighter": highlighter,
-        "collection": collection,
+        "table": table,
     }
 
 
@@ -122,17 +115,19 @@ def answer(question, models):
     The span offsets are relative to the source paragraph, so a UI can mark the
     answer inside the original text.
     """
-    collection = models["collection"]
+    table = models["table"]
     t0 = time.perf_counter()
     q_emb = encode(models["embed"], [question])[0]
-    res = collection.query(
-        query_embeddings=[q_emb],
-        n_results=TOP_K_RETRIEVE,
-        include=["documents", "distances", "metadatas"],
+    rows = (
+        table.search(q_emb, vector_column_name="vector")
+        .metric("cosine")
+        .limit(TOP_K_RETRIEVE)
+        .select(["document", "title", "heading", "_distance"])
+        .to_list()
     )
-    candidates = res["documents"][0]
-    distances = res["distances"][0]
-    metadatas = res["metadatas"][0]
+    candidates = [row["document"] for row in rows]
+    distances = [float(row["_distance"]) for row in rows]
+    metadatas = [{"title": row["title"], "heading": row["heading"]} for row in rows]
     retrieve_ms = (time.perf_counter() - t0) * 1000
 
     t0 = time.perf_counter()

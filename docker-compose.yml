@@ -1,0 +1,54 @@
+services:
+  rustfs:
+    image: rustfs/rustfs:latest
+    container_name: rustfs
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${RUSTFS_S3_PORT:-9100}:9000"
+      - "127.0.0.1:${RUSTFS_CONSOLE_PORT:-9101}:9001"
+    volumes:
+      - rustfs-data:/data
+      - rustfs-logs:/var/log/rustfs/
+    environment:
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:?Set RUSTFS_ACCESS_KEY in .env}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:?Set RUSTFS_SECRET_KEY in .env}
+      RUSTFS_ADDRESS: ":9000"
+      RUSTFS_CONSOLE_ADDRESS: ":9001"
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_OBS_LOGGER_LEVEL: error
+      RUSTFS_OBS_LOG_DIRECTORY: /var/log/rustfs/
+    command: /data
+
+  rustfs-create-bucket:
+    image: amazon/aws-cli:latest
+    depends_on:
+      rustfs:
+        condition: service_started
+    environment:
+      AWS_ACCESS_KEY_ID: ${RUSTFS_ACCESS_KEY:?Set RUSTFS_ACCESS_KEY in .env}
+      AWS_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY:?Set RUSTFS_SECRET_KEY in .env}
+      AWS_DEFAULT_REGION: ${AWS_REGION:-us-east-1}
+      AWS_EC2_METADATA_DISABLED: "true"
+      RUSTFS_BUCKET: ${RUSTFS_BUCKET:-verbatim-rag}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        set -eu
+        attempt=0
+        until aws --endpoint-url http://rustfs:9000 s3api list-buckets >/dev/null 2>&1; do
+          attempt=$$((attempt + 1))
+          if [ "$$attempt" -ge 30 ]; then
+            echo "RustFS S3 API did not become ready" >&2
+            exit 1
+          fi
+          sleep 2
+        done
+        if aws --endpoint-url http://rustfs:9000 s3api head-bucket --bucket "$$RUSTFS_BUCKET" >/dev/null 2>&1; then
+          echo "RustFS bucket '$$RUSTFS_BUCKET' already exists"
+        else
+          aws --endpoint-url http://rustfs:9000 s3api create-bucket --bucket "$$RUSTFS_BUCKET"
+        fi
+
+volumes:
+  rustfs-data:
+  rustfs-logs:
